@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Install dependencies
+# Install Python dependencies
 pip install -r requirements.txt
 
-# Install Playwright Chromium browser
+# Export persistent browser path
+export PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.playwright
+
+# Install Chromium only
 python -m playwright install chromium
