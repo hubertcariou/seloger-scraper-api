@@ -27,59 +27,59 @@ def extract_data(url):
 
     try:
         real_url = resolve_real_url(url)
-    
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(real_url, timeout=60000)
-        page.wait_for_timeout(3000)
 
-        try:
-            data["Price"] = page.locator(".Price__Label").first.text_content().strip()
-        except:
-            pass
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(real_url, timeout=60000)
+            page.wait_for_timeout(3000)
 
-        try:
-            button = page.locator("button", has_text="Voir plus")
-            if button:
-                button.click()
-                page.wait_for_timeout(1000)
-        except:
-            pass
+            try:
+                data["Price"] = page.locator(".Price__Label").first.text_content().strip()
+            except:
+                pass
 
-        try:
-            desc = page.locator(".Text__StyledText-sc-10o2fdq-0").first.text_content()
-            data["Description"] = desc.strip()
-        except:
-            pass
+            try:
+                button = page.locator("button", has_text="Voir plus")
+                if button:
+                    button.click()
+                    page.wait_for_timeout(1000)
+            except:
+                pass
 
-        try:
-            items = page.locator(".TitleValueRow__Container")
-            count = items.count()
-            for i in range(count):
-                title = items.nth(i).locator(".TitleValueRow__Title").text_content().strip()
-                value = items.nth(i).locator(".TitleValueRow__Value").text_content().strip()
-                data["Characteristics"].append(f"{title}: {value}")
+            try:
+                desc = page.locator(".Text__StyledText-sc-10o2fdq-0").first.text_content()
+                data["Description"] = desc.strip()
+            except:
+                pass
 
-                if "pièce" in title.lower():
-                    data["Total Rooms"] = value
-                elif "chambre" in title.lower():
-                    data["Bedrooms"] = value
-                elif "surface" in title.lower() and "habitable" in title.lower():
-                    data["Internal Surface"] = value
-                elif "terrain" in title.lower():
-                    data["Field Surface"] = value
-        except:
-            pass
+            try:
+                items = page.locator(".TitleValueRow__Container")
+                count = items.count()
+                for i in range(count):
+                    title = items.nth(i).locator(".TitleValueRow__Title").text_content().strip()
+                    value = items.nth(i).locator(".TitleValueRow__Value").text_content().strip()
+                    data["Characteristics"].append(f"{title}: {value}")
 
-        browser.close()
-        
-        except Exception as e:
-            print(f"[ERROR] Failed to scrape URL: {url}")
-            print(f"[EXCEPTION] {e}")
-            data["error"] = str(e)
-    
+                    if "pièce" in title.lower():
+                        data["Total Rooms"] = value
+                    elif "chambre" in title.lower():
+                        data["Bedrooms"] = value
+                    elif "surface" in title.lower() and "habitable" in title.lower():
+                        data["Internal Surface"] = value
+                    elif "terrain" in title.lower():
+                        data["Field Surface"] = value
+            except:
+                pass
+
+            browser.close()
+
+    except Exception as e:
+        print(f"[ERROR] Failed to scrape {url}: {e}")
+        data["error"] = str(e)
+
     return data
+
 
 @app.route('/extract', methods=['POST'])
 def extract():
