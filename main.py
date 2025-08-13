@@ -1,7 +1,17 @@
 from flask import Flask, request, jsonify
 from playwright.sync_api import sync_playwright
+import requests
 
 app = Flask(__name__)
+
+def resolve_real_url(short_url):
+    try:
+        response = requests.get(short_url, allow_redirects=True, timeout=10)
+        print(f"[INFO] Resolved redirect: {short_url} → {response.url}")
+        return response.url
+    except Exception as e:
+        print(f"[ERROR] Failed to resolve URL: {short_url} — {e}")
+        return short_url  # fallback if redirect fails
 
 def extract_data(url):
     data = {
@@ -15,10 +25,14 @@ def extract_data(url):
         "Characteristics": []
     }
 
+    try:
+        real_url = resolve_real_url(url)
+    
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page.goto(url, timeout=60000)
+        page.goto(real_url, timeout=60000)
+
 
         page.wait_for_timeout(3000)
 
