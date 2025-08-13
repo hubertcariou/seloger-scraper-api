@@ -32,8 +32,6 @@ def extract_data(url):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(real_url, timeout=60000)
-
-
         page.wait_for_timeout(3000)
 
         try:
@@ -75,6 +73,12 @@ def extract_data(url):
             pass
 
         browser.close()
+        
+        except Exception as e:
+            print(f"[ERROR] Failed to scrape URL: {url}")
+            print(f"[EXCEPTION] {e}")
+            data["error"] = str(e)
+    
     return data
 
 @app.route('/extract', methods=['POST'])
