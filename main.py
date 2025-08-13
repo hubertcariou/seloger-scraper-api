@@ -91,6 +91,11 @@ def extract():
     result = extract_data(url)
     return jsonify(result)
 
+@app.route("/")
+
+def health():
+    return "Seloger scraper is running", 200
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
 
