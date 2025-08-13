@@ -56,7 +56,7 @@ def extract_data(url):
                     button.click()
                     page.wait_for_timeout(1000)
             except:
-                pass
+                pass  # <-- ✅ this was missing
 
             try:
                 desc = page.locator(".Text__StyledText-sc-10o2fdq-0").first.text_content()
@@ -82,3 +82,29 @@ def extract_data(url):
                         data["Field Surface"] = value
             except:
                 pass
+
+            browser.close()
+
+    except Exception as e:
+        print(f"[ERROR] Failed to scrape {url}: {e}")
+        data["error"] = str(e)
+
+    return data
+
+
+@app.route('/extract', methods=['POST'])
+def extract():
+    body = request.json
+    if not body or 'url' not in body:
+        return jsonify({'error': 'Missing "url" field'}), 400
+
+    url = body['url']
+    result = extract_data(url)
+    return jsonify(result)
+
+@app.route('/')
+def health():
+    return "Seloger scraper is running", 200
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
