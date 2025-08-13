@@ -29,7 +29,7 @@ def extract_data(url):
         real_url = resolve_real_url(url)
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=True, args=["--disable-dev-shm-usage", "--no-sandbox"])
             page = browser.new_page()
             page.goto(real_url, timeout=60000)
 
