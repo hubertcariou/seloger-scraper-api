@@ -1,85 +1,113 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
 from playwright.sync_api import sync_playwright
-from bs4 import BeautifulSoup
+import uvicorn
 
-app = Flask(__name__)
+app = FastAPI()
 
-@app.route("/extract", methods=["POST"])
-def extract():
+# Input model for POST /extract
+class ExtractRequest(BaseModel):
+    url: str
+
+@app.post("/extract")
+async def extract_data(req: ExtractRequest):
+    url = req.url
     try:
-        data = request.get_json()
-        if not data or "url" not in data:
-            return jsonify({"error": "Missing 'url' in request body"}), 400
-
-        input_url = data["url"]
-
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
-            page = context.new_page()
+            page = browser.new_page()
 
-            # First, navigate and wait longer for redirects
-            page.goto(input_url, wait_until="load", timeout=90000)
+            # Go to the URL
+            page.goto(url, timeout=60000)
 
-            # Wait until we land on the actual Seloger listing
-            # Most listings have "/annonces/" in their final URL
-            for _ in range(10):  # retry up to ~10 seconds
-                if "/annonces/" in page.url:
-                    break
-                page.wait_for_timeout(4000)
-
-            # Accept GDPR popup if present
+            # Try to wait for <main>, but don't fail if missing
             try:
-                gdpr_button = page.locator("button:has-text('Accepter')")
-                if gdpr_button.is_visible():
-                    gdpr_button.click()
-                    page.wait_for_timeout(6000)
+                page.wait_for_selector("main", timeout=15000, state="attached")
             except:
-                pass
+                print("⚠️ Warning: <main> selector not found within 15s, continuing anyway.")
+                page.wait_for_timeout(3000)  # small delay for safety
 
-            # Wait for main content (longer timeout, less strict visibility check)
-            page.wait_for_selector("main", timeout=30000, state="attached")
+            # Now extract fields based on your provided selectors
+            data = {
+                "price": page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-1rt48lp > span.css-otf0vo"
+                ).inner_text(timeout=2000) if page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-1rt48lp > span.css-otf0vo"
+                ).count() > 0 else None,
 
-            # Expand "voir plus" if present
-            try:
-                more_button = page.locator("button:has-text('voir plus')")
-                if more_button.is_visible():
-                    more_button.click()
-                    page.wait_for_timeout(3000)
-            except:
-                pass
+                "total_rooms": page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(1) > span"
+                ).inner_text(timeout=2000) if page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(1) > span"
+                ).count() > 0 else None,
 
-            final_url = page.url
-            html = page.content()
-            soup = BeautifulSoup(html, "html.parser")
+                "bedrooms": page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(2) > span:nth-child(2)"
+                ).inner_text(timeout=2000) if page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(2) > span:nth-child(2)"
+                ).count() > 0 else None,
 
-            def select_text(selector):
-                el = soup.select_one(selector)
-                return el.get_text(strip=True) if el else None
+                "internal_surface": page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(3) > span:nth-child(2)"
+                ).inner_text(timeout=2000) if page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(3) > span:nth-child(2)"
+                ).count() > 0 else None,
 
-            extracted_data = {
-                "url": final_url,
-                "price": select_text("#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-1rt48lp > span.css-otf0vo"),
-                "total_rooms": select_text("#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(1) > span"),
-                "bedrooms": select_text("#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(2) > span:nth-child(2)"),
-                "internal_surface": select_text("#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(3) > span:nth-child(2)"),
-                "external_surface": select_text("#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(4) > span:nth-child(2)"),
-                "city_zip": select_text("#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1tn1yel > button.css-8tb8om > div > span"),
-                "full_description": select_text("#root > div > main > div.css-18xl464.MainColumn > div > section.css-13o7eu2.Section.Description > div > div > div.css-85qpxe.DescriptionTexts"),
-                "characteristics": select_text("#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(4) > div"),
-                "energy_performance": select_text("#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > div.css-1fobf8d > div > div:nth-child(1) > div"),
-                "construction_date": select_text("#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(1) > div > span:nth-child(2)"),
-                "heating_type": select_text("#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(3) > div > span:nth-child(2)"),
-                "heating_source": select_text("#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(4) > div > span:nth-child(2)")
+                "external_surface": page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(4) > span:nth-child(2)"
+                ).inner_text(timeout=2000) if page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(4) > span:nth-child(2)"
+                ).count() > 0 else None,
+
+                "city_zipcode": page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1tn1yel > button.css-8tb8om > div > span"
+                ).inner_text(timeout=2000) if page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1tn1yel > button.css-8tb8om > div > span"
+                ).count() > 0 else None,
+
+                "full_description": page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > section.css-13o7eu2.Section.Description > div > div > div.css-85qpxe.DescriptionTexts"
+                ).inner_text(timeout=2000) if page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > section.css-13o7eu2.Section.Description > div > div > div.css-85qpxe.DescriptionTexts"
+                ).count() > 0 else None,
+
+                "characteristics": page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(4) > div"
+                ).inner_text(timeout=2000) if page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(4) > div"
+                ).count() > 0 else None,
+
+                "energy_performance": page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > div.css-1fobf8d > div > div:nth-child(1) > div"
+                ).inner_text(timeout=2000) if page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > div.css-1fobf8d > div > div:nth-child(1) > div"
+                ).count() > 0 else None,
+
+                "construction_date": page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(1) > div > span:nth-child(2)"
+                ).inner_text(timeout=2000) if page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(1) > div > span:nth-child(2)"
+                ).count() > 0 else None,
+
+                "heating_type": page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(3) > div > span:nth-child(2)"
+                ).inner_text(timeout=2000) if page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(3) > div > span:nth-child(2)"
+                ).count() > 0 else None,
+
+                "heating_source": page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(4) > div > span:nth-child(2)"
+                ).inner_text(timeout=2000) if page.locator(
+                    "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(4) > div > span:nth-child(2)"
+                ).count() > 0 else None,
             }
 
             browser.close()
-
-        return jsonify(extracted_data)
+            return data
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
