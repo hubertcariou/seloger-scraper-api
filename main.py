@@ -1,169 +1,69 @@
 from flask import Flask, request, jsonify
 from playwright.sync_api import sync_playwright
-import requests
-import logging
-import os
+import re
 
-logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 app = Flask(__name__)
 
-def resolve_real_url(short_url):
-    logging.info(f"Resolving URL: {short_url}")
+def get_text_or_none(page, selector):
     try:
-        response = requests.get(short_url, allow_redirects=True, timeout=10)
-        logging.info(f"Resolved redirect: {short_url} → {response.url}")
-        return response.url
-    except Exception as e:
-        logging.error(f"Failed to resolve URL: {short_url} — {e}")
-        return short_url
-
-def safe_text(locator):
-    try:
-        if locator and locator.is_visible():
-            return locator.text_content().strip()
+        page.wait_for_selector(selector, timeout=5000)
+        return page.locator(selector).inner_text().strip()
     except:
-        pass
-    return None
+        return None
 
-def extract_data(url):
-    logging.info(f"Starting scrape for: {url}")
-    data = {
-        "URL": None,
-        "Price": None,
-        "Total Rooms": None,
-        "Bedrooms": None,
-        "Internal Surface": None,
-        "Field Surface": None,
-        "Description": None,
-        "Characteristics": [],
-        "Energy Performance": None
-    }
+@app.route("/scrape", methods=["GET"])
+def scrape():
+    url = request.args.get("url")
+    if not url:
+        return jsonify({"error": "URL parameter is missing"}), 400
 
-    try:
-        real_url = resolve_real_url(url)
-        data["URL"] = real_url
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--disable-dev-shm-usage", "--no-sandbox", "--single-process", "--disable-gpu"]
-            )
-            context = browser.new_context(
-                viewport={"width": 1024, "height": 600},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                           "(KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-            )
-            page = context.new_page()
+        # Go to the page
+        page.goto(url, wait_until="domcontentloaded")
 
-            # Block unnecessary resources
-            page.route("**/*", lambda route: route.abort()
-                       if route.request.resource_type in ["image", "media", "font", "stylesheet"]
-                       else route.continue_())
+        # Accept GDPR consent if button exists
+        try:
+            consent_button = page.locator('button:has-text("Accepter")')
+            if consent_button.is_visible():
+                consent_button.click()
+                page.wait_for_timeout(1000)
+        except:
+            pass
 
-            logging.info(f"Navigating to {real_url} ...")
-            page.goto(real_url, timeout=60000)
+        # Save redirected URL
+        redirected_url = page.url
 
-            # GDPR consent
-            try:
-                consent_btns = page.locator("button:has-text('Tout accepter'), button:has-text('Accepter')")
-                for i in range(consent_btns.count()):
-                    if consent_btns.nth(i).is_visible():
-                        logging.info("Clicking GDPR consent button")
-                        consent_btns.nth(i).click()
-                        page.wait_for_timeout(500)
-                        break
-            except:
-                pass
+        # Click "voir plus" if present
+        try:
+            voir_plus = page.locator('button:has-text("voir plus")')
+            if voir_plus.is_visible():
+                voir_plus.click()
+                page.wait_for_timeout(5000)
+        except:
+            pass
 
-            # Price
-            for sel in ["span[data-testid='price']", ".Price__Label"]:
-                price = safe_text(page.locator(sel))
-                if price:
-                    data["Price"] = price
-                    logging.info(f"Price: {price}")
-                    break
+        data = {
+            "url": redirected_url,
+            "price": get_text_or_none(page, "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-1rt48lp > span.css-otf0vo"),
+            "total_rooms": get_text_or_none(page, "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(1) > span"),
+            "bedrooms": get_text_or_none(page, "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(2) > span:nth-child(2)"),
+            "internal_surface": get_text_or_none(page, "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(3) > span:nth-child(2)"),
+            "external_surface": get_text_or_none(page, "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(4) > span:nth-child(2)"),
+            "city_zipcode": get_text_or_none(page, "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1tn1yel > button.css-8tb8om > div > span"),
+            "full_description": get_text_or_none(page, "#root > div > main > div.css-18xl464.MainColumn > div > section.css-13o7eu2.Section.Description > div > div > div.css-85qpxe.DescriptionTexts"),
+            "characteristics": get_text_or_none(page, "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(4) > div"),
+            "energy_performance": get_text_or_none(page, "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > div.css-1fobf8d > div > div:nth-child(1) > div"),
+            "construction_date": get_text_or_none(page, "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(1) > div > span:nth-child(2)"),
+            "heating_type": get_text_or_none(page, "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(3) > div > span:nth-child(2)"),
+            "heating_source": get_text_or_none(page, "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(4) > div > span:nth-child(2)")
+        }
 
-            # Total Rooms
-            for sel in ["span[data-testid='rooms']", "span:has-text('Pièces')"]:
-                rooms = safe_text(page.locator(sel))
-                if rooms:
-                    data["Total Rooms"] = rooms
-                    break
+        browser.close()
 
-            # Bedrooms
-            for sel in ["span[data-testid='bedrooms']", "span:has-text('Chambres')"]:
-                bedrooms = safe_text(page.locator(sel))
-                if bedrooms:
-                    data["Bedrooms"] = bedrooms
-                    break
+        return jsonify(data)
 
-            # Internal Surface
-            for sel in ["span[data-testid='surface']", "span:has-text('Surface')"]:
-                surface = safe_text(page.locator(sel))
-                if surface:
-                    data["Internal Surface"] = surface
-                    break
-
-            # Field Surface / External Surface
-            for sel in ["span[data-testid='field']", "span:has-text('Terrain')"]:
-                field = safe_text(page.locator(sel))
-                if field:
-                    data["Field Surface"] = field
-                    break
-
-            # Description
-            try:
-                voir_plus = page.locator("button:has-text('Voir plus')")
-                if voir_plus and voir_plus.is_visible():
-                    logging.info("Clicking 'Voir plus' to expand description")
-                    voir_plus.click()
-                    page.wait_for_timeout(500)
-
-                desc = safe_text(page.locator(".Text__StyledText-sc-10o2fdq-0"))
-                if desc:
-                    data["Description"] = desc
-            except:
-                logging.info("Description not found")
-
-            # Characteristics
-            try:
-                items = page.locator(".TitleValueRow__Container")
-                for i in range(items.count()):
-                    title = safe_text(items.nth(i).locator(".TitleValueRow__Title"))
-                    value = safe_text(items.nth(i).locator(".TitleValueRow__Value"))
-                    if title and value:
-                        data["Characteristics"].append(f"{title}: {value}")
-            except:
-                logging.info("Characteristics not found")
-
-            # Energy Performance
-            try:
-                energy_label = safe_text(page.locator("span:has-text('Performance énergétique') + span"))
-                if energy_label:
-                    data["Energy Performance"] = energy_label
-            except:
-                logging.info("Energy performance not found")
-
-            browser.close()
-            logging.info("Browser closed")
-
-    except Exception as e:
-        logging.error(f"Failed to scrape {url}: {e}")
-        data["error"] = str(e)
-
-    return data
-
-@app.route('/extract', methods=['POST'])
-def extract():
-    body = request.json
-    if not body or 'url' not in body:
-        return jsonify({'error': 'Missing "url" field'}), 400
-    return jsonify(extract_data(body['url']))
-
-@app.route('/')
-def health():
-    return "Seloger scraper is running", 200
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
