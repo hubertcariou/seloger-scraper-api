@@ -3,7 +3,6 @@ from playwright.sync_api import sync_playwright
 import requests
 import logging
 import os
-import re
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 app = Flask(__name__)
@@ -20,10 +19,11 @@ def resolve_real_url(short_url):
 
 def safe_text(locator):
     try:
-        text = locator.first.text_content()
-        return text.strip() if text else None
+        if locator and locator.is_visible():
+            return locator.text_content().strip()
     except:
-        return None
+        pass
+    return None
 
 def extract_data(url):
     logging.info(f"Starting scrape for: {url}")
@@ -53,7 +53,7 @@ def extract_data(url):
             )
             page = context.new_page()
 
-            # --- Block unnecessary resources ---
+            # Block unnecessary resources
             page.route("**/*", lambda route: route.abort()
                        if route.request.resource_type in ["image", "media", "font", "stylesheet"]
                        else route.continue_())
@@ -72,41 +72,36 @@ def extract_data(url):
                 pass
 
             # Price
-            price_selectors = [".Price__Label", "span[data-testid='price']"]
-            for sel in price_selectors:
+            for sel in [".Price__Label", "span[data-testid='price']"]:
                 price = safe_text(page.locator(sel))
                 if price:
                     data["Price"] = price
-                    logging.info(f"Price: {data['Price']}")
+                    logging.info(f"Price: {price}")
                     break
 
             # Total Rooms
-            room_selectors = ["span:has-text('Pièces')", "span[data-testid='rooms']"]
-            for sel in room_selectors:
+            for sel in ["span:has-text('Pièces')", "span[data-testid='rooms']"]:
                 rooms = safe_text(page.locator(sel))
                 if rooms:
                     data["Total Rooms"] = rooms
                     break
 
             # Bedrooms
-            bedroom_selectors = ["span:has-text('Chambres')", "span[data-testid='bedrooms']"]
-            for sel in bedroom_selectors:
+            for sel in ["span:has-text('Chambres')", "span[data-testid='bedrooms']"]:
                 bedrooms = safe_text(page.locator(sel))
                 if bedrooms:
                     data["Bedrooms"] = bedrooms
                     break
 
             # Internal Surface
-            surface_selectors = ["span:has-text('Surface')", "span[data-testid='surface']"]
-            for sel in surface_selectors:
+            for sel in ["span:has-text('Surface')", "span[data-testid='surface']"]:
                 surface = safe_text(page.locator(sel))
                 if surface:
                     data["Internal Surface"] = surface
                     break
 
             # Field Surface
-            field_selectors = ["span:has-text('Terrain')", "span[data-testid='field']"]
-            for sel in field_selectors:
+            for sel in ["span:has-text('Terrain')", "span[data-testid='field']"]:
                 field = safe_text(page.locator(sel))
                 if field:
                     data["Field Surface"] = field
@@ -114,7 +109,6 @@ def extract_data(url):
 
             # Description
             try:
-                # Click "Voir plus" if present
                 voir_plus = page.locator("button:has-text('Voir plus')")
                 if voir_plus and voir_plus.is_visible():
                     logging.info("Clicking 'Voir plus' to expand description")
@@ -138,8 +132,26 @@ def extract_data(url):
             except:
                 logging.info("Characteristics not found")
 
-            # Extra fallback: parse numeric info from characteristics
-            for char in data["Characteristics"]:
-                if not data["Total Rooms"] and re.search(r"Pièces\s*:\s*(\d+)", char):
-                    data["Total Rooms"] = re.search(r"Pièces\s*:\s*(\d+)", char).group(1)
-                if not data["Be]()
+            browser.close()
+            logging.info("Browser closed")
+
+    except Exception as e:
+        logging.error(f"Failed to scrape {url}: {e}")
+        data["error"] = str(e)
+
+    return data
+
+@app.route('/extract', methods=['POST'])
+def extract():
+    body = request.json
+    if not body or 'url' not in body:
+        return jsonify({'error': 'Missing "url" field'}), 400
+    return jsonify(extract_data(body['url']))
+
+@app.route('/')
+def health():
+    return "Seloger scraper is running", 200
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
