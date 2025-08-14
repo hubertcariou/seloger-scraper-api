@@ -1,15 +1,13 @@
 from flask import Flask, request, jsonify
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+from playwright.sync_api import sync_playwright
 import requests
 import logging
 
-# -------------------- Logging setup --------------------
+# --- Setup logging ---
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
-# -------------------- Flask app --------------------
 app = Flask(__name__)
 
-# -------------------- Helper functions --------------------
 def resolve_real_url(short_url):
     logging.info(f"Resolving URL: {short_url}")
     try:
@@ -18,10 +16,11 @@ def resolve_real_url(short_url):
         return response.url
     except Exception as e:
         logging.error(f"Failed to resolve URL: {short_url} — {e}")
-        return short_url  # fallback if redirect fails
+        return short_url  # fallback
 
 def extract_data(url):
     logging.info(f"Starting scrape for: {url}")
+
     data = {
         "URL": url,
         "Price": None,
@@ -41,69 +40,69 @@ def extract_data(url):
             browser = p.chromium.launch(
                 headless=True,
                 args=[
-                    "--disable-dev-shm-usage",  # prevent shared memory issues
-                    "--no-sandbox",             # required on Render free plan
-                    "--single-process",         # reduce RAM usage
-                    "--disable-gpu"
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--single-process"
                 ]
             )
-
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36",
-                viewport={"width": 1280, "height": 720},
-                java_script_enabled=True
-            )
-
+            context = browser.new_context(viewport={"width": 1024, "height": 600})
             page = context.new_page()
-            logging.info(f"Navigating to {real_url}...")
-            try:
-                page.goto(real_url, timeout=60000)
-            except PlaywrightTimeout:
-                logging.warning("Page load timed out, continuing...")
 
-            # Click GDPR consent if visible
+            # Block images, fonts, media to save RAM
+            page.route("**/*", lambda route: route.abort() 
+                       if route.request.resource_type in ["image", "media", "font"] 
+                       else route.continue_())
+
+            logging.info(f"Navigating to {real_url} ...")
+            page.goto(real_url, timeout=60000)
+
+            # GDPR consent
             try:
                 consent_button = page.locator("button:has-text('Tout accepter')")
-                if consent_button.is_visible():
+                if consent_button and consent_button.is_visible():
                     logging.info("GDPR popup detected — clicking 'Tout accepter'")
                     consent_button.click()
-                    page.wait_for_timeout(1000)
+                    page.wait_for_timeout(500)
             except Exception as e:
-                logging.info(f"No GDPR popup detected or failed to click: {e}")
+                logging.warning(f"GDPR popup handling failed: {e}")
 
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(1000)
 
-            # Extract price
+            # Price
             try:
-                data["Price"] = page.locator(".Price__Label").first.text_content().strip()
-                logging.info(f"Price found: {data['Price']}")
-            except:
-                logging.info("Price not found")
+                price = page.locator(".Price__Label").first.text_content()
+                if price:
+                    data["Price"] = price.strip()
+                    logging.info(f"Price found: {data['Price']}")
+                else:
+                    logging.info("Price not found")
+            except Exception as e:
+                logging.warning(f"Price extraction failed: {e}")
 
-            # Click 'Voir plus' if exists
+            # "Voir plus" button
             try:
                 button = page.locator("button", has_text="Voir plus")
                 if button:
                     logging.info("Clicking 'Voir plus' button")
                     button.click()
-                    page.wait_for_timeout(1000)
-            except:
-                logging.info("'Voir plus' button not found")
+                    page.wait_for_timeout(500)
+            except Exception as e:
+                logging.warning(f"'Voir plus' click failed: {e}")
 
-            # Extract description
+            # Description
             try:
                 desc = page.locator(".Text__StyledText-sc-10o2fdq-0").first.text_content()
-                data["Description"] = desc.strip()
-                logging.info("Description extracted")
+                if desc:
+                    data["Description"] = desc.strip()
+                    logging.info("Description extracted")
             except:
                 logging.info("Description not found")
 
-            # Extract characteristics
+            # Characteristics
             try:
                 items = page.locator(".TitleValueRow__Container")
                 count = items.count()
-                logging.info(f"Found {count} characteristic rows")
                 for i in range(count):
                     title = items.nth(i).locator(".TitleValueRow__Title").text_content().strip()
                     value = items.nth(i).locator(".TitleValueRow__Value").text_content().strip()
@@ -117,11 +116,12 @@ def extract_data(url):
                         data["Internal Surface"] = value
                     elif "terrain" in title.lower():
                         data["Field Surface"] = value
+                logging.info("Characteristics extracted")
             except Exception as e:
-                logging.info(f"Failed to extract characteristics: {e}")
+                logging.warning(f"Characteristics extraction failed: {e}")
 
             browser.close()
-            logging.info("Browser closed, scraping complete.")
+            logging.info("Browser closed")
 
     except Exception as e:
         logging.error(f"Failed to scrape {url}: {e}")
@@ -129,12 +129,10 @@ def extract_data(url):
 
     return data
 
-# -------------------- Flask routes --------------------
 @app.route('/extract', methods=['POST'])
 def extract():
     body = request.json
     if not body or 'url' not in body:
-        logging.warning('Missing "url" field in request')
         return jsonify({'error': 'Missing "url" field'}), 400
 
     url = body['url']
@@ -145,7 +143,8 @@ def extract():
 def health():
     return "Seloger scraper is running", 200
 
-# -------------------- Main --------------------
 if __name__ == '__main__':
-    logging.info("Starting Seloger scraper API...")
-    app.run(host='0.0.0.0', port=5000)
+    # Use port from Render env variable if available
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
