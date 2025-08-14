@@ -28,18 +28,20 @@ def safe_text(locator):
 def extract_data(url):
     logging.info(f"Starting scrape for: {url}")
     data = {
-        "URL": url,
+        "URL": None,
         "Price": None,
         "Total Rooms": None,
         "Bedrooms": None,
         "Internal Surface": None,
         "Field Surface": None,
         "Description": None,
-        "Characteristics": []
+        "Characteristics": [],
+        "Energy Performance": None
     }
 
     try:
         real_url = resolve_real_url(url)
+        data["URL"] = real_url
 
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -63,16 +65,18 @@ def extract_data(url):
 
             # GDPR consent
             try:
-                consent = page.locator("button:has-text('Tout accepter')")
-                if consent and consent.is_visible():
-                    logging.info("Clicking GDPR consent button")
-                    consent.click()
-                    page.wait_for_timeout(500)
+                consent_btns = page.locator("button:has-text('Tout accepter'), button:has-text('Accepter')")
+                for i in range(consent_btns.count()):
+                    if consent_btns.nth(i).is_visible():
+                        logging.info("Clicking GDPR consent button")
+                        consent_btns.nth(i).click()
+                        page.wait_for_timeout(500)
+                        break
             except:
                 pass
 
             # Price
-            for sel in [".Price__Label", "span[data-testid='price']"]:
+            for sel in ["span[data-testid='price']", ".Price__Label"]:
                 price = safe_text(page.locator(sel))
                 if price:
                     data["Price"] = price
@@ -80,28 +84,28 @@ def extract_data(url):
                     break
 
             # Total Rooms
-            for sel in ["span:has-text('Pièces')", "span[data-testid='rooms']"]:
+            for sel in ["span[data-testid='rooms']", "span:has-text('Pièces')"]:
                 rooms = safe_text(page.locator(sel))
                 if rooms:
                     data["Total Rooms"] = rooms
                     break
 
             # Bedrooms
-            for sel in ["span:has-text('Chambres')", "span[data-testid='bedrooms']"]:
+            for sel in ["span[data-testid='bedrooms']", "span:has-text('Chambres')"]:
                 bedrooms = safe_text(page.locator(sel))
                 if bedrooms:
                     data["Bedrooms"] = bedrooms
                     break
 
             # Internal Surface
-            for sel in ["span:has-text('Surface')", "span[data-testid='surface']"]:
+            for sel in ["span[data-testid='surface']", "span:has-text('Surface')"]:
                 surface = safe_text(page.locator(sel))
                 if surface:
                     data["Internal Surface"] = surface
                     break
 
-            # Field Surface
-            for sel in ["span:has-text('Terrain')", "span[data-testid='field']"]:
+            # Field Surface / External Surface
+            for sel in ["span[data-testid='field']", "span:has-text('Terrain')"]:
                 field = safe_text(page.locator(sel))
                 if field:
                     data["Field Surface"] = field
@@ -131,6 +135,14 @@ def extract_data(url):
                         data["Characteristics"].append(f"{title}: {value}")
             except:
                 logging.info("Characteristics not found")
+
+            # Energy Performance
+            try:
+                energy_label = safe_text(page.locator("span:has-text('Performance énergétique') + span"))
+                if energy_label:
+                    data["Energy Performance"] = energy_label
+            except:
+                logging.info("Energy performance not found")
 
             browser.close()
             logging.info("Browser closed")
