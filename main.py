@@ -1,19 +1,27 @@
 from flask import Flask, request, jsonify
-from playwright.sync_api import sync_playwright
-import signal
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+import requests
+import logging
 
+# -------------------- Logging setup --------------------
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+
+# -------------------- Flask app --------------------
 app = Flask(__name__)
 
-# Timeout safeguard (per request)
-class TimeoutException(Exception):
-    pass
-
-def timeout_handler(signum, frame):
-    raise TimeoutException("Request took too long")
-
-signal.signal(signal.SIGALRM, timeout_handler)
+# -------------------- Helper functions --------------------
+def resolve_real_url(short_url):
+    logging.info(f"Resolving URL: {short_url}")
+    try:
+        response = requests.get(short_url, allow_redirects=True, timeout=10)
+        logging.info(f"Resolved redirect: {short_url} → {response.url}")
+        return response.url
+    except Exception as e:
+        logging.error(f"Failed to resolve URL: {short_url} — {e}")
+        return short_url  # fallback if redirect fails
 
 def extract_data(url):
+    logging.info(f"Starting scrape for: {url}")
     data = {
         "URL": url,
         "Price": None,
@@ -26,72 +34,77 @@ def extract_data(url):
     }
 
     try:
+        real_url = resolve_real_url(url)
+
         with sync_playwright() as p:
-            # Firefox for lower RAM usage
-            browser = p.firefox.launch(
+            logging.info("Launching Chromium browser...")
+            browser = p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"]
+                args=[
+                    "--disable-dev-shm-usage",  # prevent shared memory issues
+                    "--no-sandbox",             # required on Render free plan
+                    "--single-process",         # reduce RAM usage
+                    "--disable-gpu"
+                ]
             )
 
-            page = browser.new_page(
-                user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) "
-                           "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 "
-                           "Mobile/15E148 Safari/604.1"
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36",
+                viewport={"width": 1280, "height": 720},
+                java_script_enabled=True
             )
-            page.set_viewport_size({"width": 375, "height": 812})  # Mobile viewport
 
-            # Block heavy or non-essential resources
-            def block_unneeded(route):
-                if route.request.resource_type in [
-                    "image", "stylesheet", "font", "media", "other", "script"
-                ]:
-                    # Allow only JS from Seloger's main domain
-                    if "seloger.com" not in route.request.url:
-                        return route.abort()
-                return route.continue_()
+            page = context.new_page()
+            logging.info(f"Navigating to {real_url}...")
+            try:
+                page.goto(real_url, timeout=60000)
+            except PlaywrightTimeout:
+                logging.warning("Page load timed out, continuing...")
 
-            page.route("**/*", block_unneeded)
-
-            # Go to URL (Firefox handles redirects)
-            page.goto(url, timeout=20000)  # 20s max
-
-            # Handle GDPR popup if present
+            # Click GDPR consent if visible
             try:
                 consent_button = page.locator("button:has-text('Tout accepter')")
-                if consent_button.is_visible(timeout=1500):
+                if consent_button.is_visible():
+                    logging.info("GDPR popup detected — clicking 'Tout accepter'")
                     consent_button.click()
-                    page.wait_for_timeout(300)
-            except:
-                pass
+                    page.wait_for_timeout(1000)
+            except Exception as e:
+                logging.info(f"No GDPR popup detected or failed to click: {e}")
 
-            # Price
+            page.wait_for_timeout(2000)
+
+            # Extract price
             try:
-                page.wait_for_selector(".Price__Label", timeout=4000)
                 data["Price"] = page.locator(".Price__Label").first.text_content().strip()
+                logging.info(f"Price found: {data['Price']}")
             except:
-                pass
+                logging.info("Price not found")
 
-            # "Voir plus"
+            # Click 'Voir plus' if exists
             try:
-                voir_plus_btn = page.locator("button:has-text('Voir plus')")
-                if voir_plus_btn.is_visible(timeout=1500):
-                    voir_plus_btn.click()
-                    page.wait_for_timeout(300)
+                button = page.locator("button", has_text="Voir plus")
+                if button:
+                    logging.info("Clicking 'Voir plus' button")
+                    button.click()
+                    page.wait_for_timeout(1000)
             except:
-                pass
+                logging.info("'Voir plus' button not found")
 
-            # Description
+            # Extract description
             try:
                 desc = page.locator(".Text__StyledText-sc-10o2fdq-0").first.text_content()
-                if desc:
-                    data["Description"] = desc.strip()
+                data["Description"] = desc.strip()
+                logging.info("Description extracted")
             except:
-                pass
+                logging.info("Description not found")
 
-            # Characteristics
+            # Extract characteristics
             try:
                 items = page.locator(".TitleValueRow__Container")
-                for i in range(items.count()):
+                count = items.count()
+                logging.info(f"Found {count} characteristic rows")
+                for i in range(count):
                     title = items.nth(i).locator(".TitleValueRow__Title").text_content().strip()
                     value = items.nth(i).locator(".TitleValueRow__Value").text_content().strip()
                     data["Characteristics"].append(f"{title}: {value}")
@@ -104,38 +117,35 @@ def extract_data(url):
                         data["Internal Surface"] = value
                     elif "terrain" in title.lower():
                         data["Field Surface"] = value
-            except:
-                pass
+            except Exception as e:
+                logging.info(f"Failed to extract characteristics: {e}")
 
             browser.close()
+            logging.info("Browser closed, scraping complete.")
 
-    except TimeoutException:
-        data["error"] = "Scraping timed out"
     except Exception as e:
-        print(f"[ERROR] Failed to scrape {url}: {e}")
+        logging.error(f"Failed to scrape {url}: {e}")
         data["error"] = str(e)
 
     return data
 
+# -------------------- Flask routes --------------------
 @app.route('/extract', methods=['POST'])
 def extract():
     body = request.json
     if not body or 'url' not in body:
-        return jsonify({'error': 'Missing \"url\" field'}), 400
+        logging.warning('Missing "url" field in request')
+        return jsonify({'error': 'Missing "url" field'}), 400
 
-    signal.alarm(40)  # 40s max for request
-    try:
-        url = body['url']
-        result = extract_data(url)
-        return jsonify(result)
-    except TimeoutException:
-        return jsonify({'error': 'Processing took too long'}), 504
-    finally:
-        signal.alarm(0)
+    url = body['url']
+    result = extract_data(url)
+    return jsonify(result)
 
 @app.route('/')
 def health():
     return "Seloger scraper is running", 200
 
+# -------------------- Main --------------------
 if __name__ == '__main__':
+    logging.info("Starting Seloger scraper API...")
     app.run(host='0.0.0.0', port=5000)
