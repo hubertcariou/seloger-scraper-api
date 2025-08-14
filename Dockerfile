@@ -1,20 +1,20 @@
-# Use official Playwright image with Python and Chromium preinstalled
-FROM mcr.microsoft.com/playwright:v1.54.0-focal
+# Use the official Playwright Python image
+FROM mcr.microsoft.com/playwright/python:v1.54.0
 
-# Set working directory
+# Set the working directory
 WORKDIR /app
 
-# Copy Python dependencies first (for caching)
+# Copy the requirements file
 COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the app
+# Copy the application code
 COPY . .
 
-# Expose the port that Flask uses
+# Expose the port
 EXPOSE 5000
 
-# Run the app
+# Run the application
 CMD ["python", "main.py"]
