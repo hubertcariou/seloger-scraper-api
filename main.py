@@ -4,13 +4,14 @@ import signal
 
 app = Flask(__name__)
 
-# Optional: Flask-level timeout safeguard (in seconds)
-REQUEST_TIMEOUT = 40
+# Timeout safeguard (per request)
+class TimeoutException(Exception):
+    pass
 
 def timeout_handler(signum, frame):
-    raise TimeoutError("Request took too long and was aborted.")
-signal.signal(signal.SIGALRM, timeout_handler)
+    raise TimeoutException("Request took too long")
 
+signal.signal(signal.SIGALRM, timeout_handler)
 
 def extract_data(url):
     data = {
@@ -26,49 +27,56 @@ def extract_data(url):
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(
+            # Firefox for lower RAM usage
+            browser = p.firefox.launch(
                 headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--single-process"
-                ]
+                args=["--no-sandbox", "--disable-dev-shm-usage"]
             )
-            page = browser.new_page()
 
-            # Block heavy resources for speed & memory
-            page.route("**/*", lambda route: route.abort()
-                       if route.request.resource_type in ["image", "stylesheet", "font"]
-                       else route.continue_())
+            page = browser.new_page(
+                user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) "
+                           "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 "
+                           "Mobile/15E148 Safari/604.1"
+            )
+            page.set_viewport_size({"width": 375, "height": 812})  # Mobile viewport
 
-            # Go directly to the URL (Playwright will handle redirects)
-            page.goto(url, timeout=30000)  # 30s max
+            # Block heavy or non-essential resources
+            def block_unneeded(route):
+                if route.request.resource_type in [
+                    "image", "stylesheet", "font", "media", "other", "script"
+                ]:
+                    # Allow only JS from Seloger's main domain
+                    if "seloger.com" not in route.request.url:
+                        return route.abort()
+                return route.continue_()
+
+            page.route("**/*", block_unneeded)
+
+            # Go to URL (Firefox handles redirects)
+            page.goto(url, timeout=20000)  # 20s max
 
             # Handle GDPR popup if present
             try:
                 consent_button = page.locator("button:has-text('Tout accepter')")
-                if consent_button.is_visible(timeout=2000):
-                    print("GDPR popup detected — clicking 'Tout accepter'")
+                if consent_button.is_visible(timeout=1500):
                     consent_button.click()
-                    page.wait_for_timeout(500)
+                    page.wait_for_timeout(300)
             except:
                 pass
 
             # Price
             try:
-                page.wait_for_selector(".Price__Label", timeout=5000)
+                page.wait_for_selector(".Price__Label", timeout=4000)
                 data["Price"] = page.locator(".Price__Label").first.text_content().strip()
             except:
                 pass
 
-            # Expand "Voir plus" if available
+            # "Voir plus"
             try:
-                voir_plus_button = page.locator("button:has-text('Voir plus')")
-                if voir_plus_button.is_visible(timeout=2000):
-                    voir_plus_button.click()
-                    page.wait_for_timeout(500)
+                voir_plus_btn = page.locator("button:has-text('Voir plus')")
+                if voir_plus_btn.is_visible(timeout=1500):
+                    voir_plus_btn.click()
+                    page.wait_for_timeout(300)
             except:
                 pass
 
@@ -101,8 +109,7 @@ def extract_data(url):
 
             browser.close()
 
-    except TimeoutError as te:
-        print(f"[TIMEOUT] {te}")
+    except TimeoutException:
         data["error"] = "Scraping timed out"
     except Exception as e:
         print(f"[ERROR] Failed to scrape {url}: {e}")
@@ -110,30 +117,25 @@ def extract_data(url):
 
     return data
 
-
 @app.route('/extract', methods=['POST'])
 def extract():
     body = request.json
     if not body or 'url' not in body:
         return jsonify({'error': 'Missing \"url\" field'}), 400
 
-    url = body['url']
-
-    # Start Flask request timeout
-    signal.alarm(REQUEST_TIMEOUT)
-
+    signal.alarm(40)  # 40s max for request
     try:
+        url = body['url']
         result = extract_data(url)
+        return jsonify(result)
+    except TimeoutException:
+        return jsonify({'error': 'Processing took too long'}), 504
     finally:
-        signal.alarm(0)  # Disable timeout after request
-
-    return jsonify(result)
-
+        signal.alarm(0)
 
 @app.route('/')
 def health():
     return "Seloger scraper is running", 200
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
