@@ -18,42 +18,45 @@ def extract():
             context = browser.new_context()
             page = context.new_page()
 
-            # Go to the page
-            page.goto(input_url, wait_until="domcontentloaded", timeout=60000)
+            # First, navigate and wait longer for redirects
+            page.goto(input_url, wait_until="load", timeout=90000)
 
-            # Handle GDPR consent if present
+            # Wait until we land on the actual Seloger listing
+            # Most listings have "/annonces/" in their final URL
+            for _ in range(10):  # retry up to ~10 seconds
+                if "/annonces/" in page.url:
+                    break
+                page.wait_for_timeout(4000)
+
+            # Accept GDPR popup if present
             try:
                 gdpr_button = page.locator("button:has-text('Accepter')")
                 if gdpr_button.is_visible():
                     gdpr_button.click()
-                    page.wait_for_timeout(2000)
+                    page.wait_for_timeout(6000)
             except:
                 pass
 
-            # Wait for main content
-            page.wait_for_selector("main", timeout=10000)
-
-            # Get final redirected URL
-            final_url = page.url
+            # Wait for main content (longer timeout, less strict visibility check)
+            page.wait_for_selector("main", timeout=30000, state="attached")
 
             # Expand "voir plus" if present
             try:
                 more_button = page.locator("button:has-text('voir plus')")
                 if more_button.is_visible():
                     more_button.click()
-                    page.wait_for_timeout(1500)
+                    page.wait_for_timeout(3000)
             except:
                 pass
 
+            final_url = page.url
             html = page.content()
             soup = BeautifulSoup(html, "html.parser")
 
-            # Helper to extract text safely
             def select_text(selector):
                 el = soup.select_one(selector)
                 return el.get_text(strip=True) if el else None
 
-            # Extract fields using your selectors
             extracted_data = {
                 "url": final_url,
                 "price": select_text("#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-1rt48lp > span.css-otf0vo"),
