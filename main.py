@@ -3,6 +3,7 @@ from playwright.sync_api import sync_playwright
 import requests
 import logging
 import os
+import re
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 app = Flask(__name__)
@@ -17,9 +18,25 @@ def resolve_real_url(short_url):
         logging.error(f"Failed to resolve URL: {short_url} — {e}")
         return short_url
 
+def safe_text(locator):
+    try:
+        text = locator.first.text_content()
+        return text.strip() if text else None
+    except:
+        return None
+
 def extract_data(url):
     logging.info(f"Starting scrape for: {url}")
-    data = {"URL": url, "Price": None, "Description": None, "Characteristics": []}
+    data = {
+        "URL": url,
+        "Price": None,
+        "Total Rooms": None,
+        "Bedrooms": None,
+        "Internal Surface": None,
+        "Field Surface": None,
+        "Description": None,
+        "Characteristics": []
+    }
 
     try:
         real_url = resolve_real_url(url)
@@ -55,19 +72,58 @@ def extract_data(url):
                 pass
 
             # Price
-            try:
-                price = page.locator(".Price__Label").first.text_content()
+            price_selectors = [".Price__Label", "span[data-testid='price']"]
+            for sel in price_selectors:
+                price = safe_text(page.locator(sel))
                 if price:
-                    data["Price"] = price.strip()
+                    data["Price"] = price
                     logging.info(f"Price: {data['Price']}")
-            except:
-                logging.info("Price not found")
+                    break
+
+            # Total Rooms
+            room_selectors = ["span:has-text('Pièces')", "span[data-testid='rooms']"]
+            for sel in room_selectors:
+                rooms = safe_text(page.locator(sel))
+                if rooms:
+                    data["Total Rooms"] = rooms
+                    break
+
+            # Bedrooms
+            bedroom_selectors = ["span:has-text('Chambres')", "span[data-testid='bedrooms']"]
+            for sel in bedroom_selectors:
+                bedrooms = safe_text(page.locator(sel))
+                if bedrooms:
+                    data["Bedrooms"] = bedrooms
+                    break
+
+            # Internal Surface
+            surface_selectors = ["span:has-text('Surface')", "span[data-testid='surface']"]
+            for sel in surface_selectors:
+                surface = safe_text(page.locator(sel))
+                if surface:
+                    data["Internal Surface"] = surface
+                    break
+
+            # Field Surface
+            field_selectors = ["span:has-text('Terrain')", "span[data-testid='field']"]
+            for sel in field_selectors:
+                field = safe_text(page.locator(sel))
+                if field:
+                    data["Field Surface"] = field
+                    break
 
             # Description
             try:
-                desc = page.locator(".Text__StyledText-sc-10o2fdq-0").first.text_content()
+                # Click "Voir plus" if present
+                voir_plus = page.locator("button:has-text('Voir plus')")
+                if voir_plus and voir_plus.is_visible():
+                    logging.info("Clicking 'Voir plus' to expand description")
+                    voir_plus.click()
+                    page.wait_for_timeout(500)
+
+                desc = safe_text(page.locator(".Text__StyledText-sc-10o2fdq-0"))
                 if desc:
-                    data["Description"] = desc.strip()
+                    data["Description"] = desc
             except:
                 logging.info("Description not found")
 
@@ -75,32 +131,15 @@ def extract_data(url):
             try:
                 items = page.locator(".TitleValueRow__Container")
                 for i in range(items.count()):
-                    title = items.nth(i).locator(".TitleValueRow__Title").text_content().strip()
-                    value = items.nth(i).locator(".TitleValueRow__Value").text_content().strip()
-                    data["Characteristics"].append(f"{title}: {value}")
+                    title = safe_text(items.nth(i).locator(".TitleValueRow__Title"))
+                    value = safe_text(items.nth(i).locator(".TitleValueRow__Value"))
+                    if title and value:
+                        data["Characteristics"].append(f"{title}: {value}")
             except:
                 logging.info("Characteristics not found")
 
-            browser.close()
-            logging.info("Browser closed")
-
-    except Exception as e:
-        logging.error(f"Failed to scrape {url}: {e}")
-        data["error"] = str(e)
-
-    return data
-
-@app.route('/extract', methods=['POST'])
-def extract():
-    body = request.json
-    if not body or 'url' not in body:
-        return jsonify({'error': 'Missing "url" field'}), 400
-    return jsonify(extract_data(body['url']))
-
-@app.route('/')
-def health():
-    return "Seloger scraper is running", 200
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+            # Extra fallback: parse numeric info from characteristics
+            for char in data["Characteristics"]:
+                if not data["Total Rooms"] and re.search(r"Pièces\s*:\s*(\d+)", char):
+                    data["Total Rooms"] = re.search(r"Pièces\s*:\s*(\d+)", char).group(1)
+                if not data["Be]()
