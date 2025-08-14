@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-set -o errexit
 
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Keep browser install in Render's persistent storage to speed up builds
+# Set persistent Playwright browser path
 export PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.playwright
 
-# Install Chromium only (works on free plan)
-python -m playwright install chromium
+# Install only Chromium (minimal footprint)
+python -m playwright install chromium --with-deps
+
+# Optional: Clean cache to save space
+rm -rf /root/.cache/pip
+rm -rf /root/.cache/ms-playwright
