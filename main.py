@@ -1,20 +1,17 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from playwright.sync_api import sync_playwright
-import uvicorn
+from playwright.async_api import async_playwright
 
 app = FastAPI()
 
-# Model for POST body
 class ExtractRequest(BaseModel):
     url: str
 
-# Helper: safely get text from selector
-def get_text_safe(page, selector: str, timeout: int = 2000):
+async def get_text_safe(page, selector: str, timeout: int = 2000):
     try:
         locator = page.locator(selector)
-        if locator.count() > 0:
-            return locator.inner_text(timeout=timeout).strip()
+        if await locator.count() > 0:
+            return (await locator.inner_text(timeout=timeout)).strip()
     except Exception:
         pass
     return None
@@ -23,21 +20,16 @@ def get_text_safe(page, selector: str, timeout: int = 2000):
 async def extract_data(req: ExtractRequest):
     url = req.url
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-
-            # Go to the URL
-            page.goto(url, timeout=60000)
-
-            # Wait for <main>, but continue if missing
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True, args=["--disable-dev-shm-usage"])
+            page = await browser.new_page()
+            await page.goto(url, timeout=60000)
             try:
-                page.wait_for_selector("main", timeout=15000, state="attached")
+                await page.wait_for_selector("main", timeout=15000, state="attached")
             except:
                 print("⚠️ <main> not found in time, continuing...")
-                page.wait_for_timeout(3000)
+                await page.wait_for_timeout(3000)
 
-            # All selectors in one place
             selectors = {
                 "price": "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-1rt48lp > span.css-otf0vo",
                 "total_rooms": "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(1) > span",
@@ -53,14 +45,14 @@ async def extract_data(req: ExtractRequest):
                 "heating_source": "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(4) > div > span:nth-child(2)",
             }
 
-            # Extract all fields safely
-            data = {key: get_text_safe(page, sel) for key, sel in selectors.items()}
+            data = {}
+            for key, sel in selectors.items():
+                data[key] = await get_text_safe(page, sel)
 
-            browser.close()
+            await page.close()
+            await browser.close()
             return data
 
     except Exception as e:
         return {"error": str(e)}
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+        
