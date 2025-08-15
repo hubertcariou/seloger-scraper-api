@@ -1,4 +1,4 @@
-# Use the official Playwright Python image (already includes Chromium)
+# Use the official Playwright Python image (includes Chromium + deps)
 FROM mcr.microsoft.com/playwright/python:v1.54.0
 
 # Set working directory
@@ -10,11 +10,11 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application code
+# Copy the rest of the app
 COPY . .
 
-# Expose the port used by your Flask app
-EXPOSE 5000
+# Expose FastAPI port
+EXPOSE 8000
 
-# Run the application
-CMD ["python", "main.py"]
+# Run FastAPI app with Uvicorn
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
