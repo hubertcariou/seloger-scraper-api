@@ -73,19 +73,26 @@ async def extract(request: ExtractRequest):
 
             # --- GDPR Consent Handling ---
             try:
+                await page.wait_for_selector("button:has-text('Tout accepter')", timeout=5000)
                 consent_button = await page.query_selector("button:has-text('Tout accepter')")
                 if consent_button:
                     await consent_button.click()
                     logger.info("GDPR consent accepted.")
-                    await page.wait_for_timeout(1000)  # Wait for UI update
+                    await page.wait_for_timeout(1000)
             except Exception as e:
-                logger.warning(f"GDPR consent button not found or could not be clicked: {e}")
+                logger.info("GDPR consent button not found or already accepted.")
+
+            # --- Wait for main content (price) before extracting ---
+            try:
+                await page.wait_for_selector(selectors["price"], timeout=15000)
+            except Exception as e:
+                logger.warning(f"Key element for extraction not found: {e}")
 
             # --- Data Extraction ---
             extracted = {}
             for field, selector in selectors.items():
                 try:
-                    value = await page.text_content(selector)
+                    value = await page.text_content(selector, timeout=5000)
                     extracted[field] = value.strip() if value else ""
                 except Exception as e:
                     logger.warning(f"Could not extract '{field}': {e}")
