@@ -29,14 +29,36 @@ class ExtractRequest(BaseModel):
 
 class ExtractResponse(BaseModel):
     redirected_url: str
-    title: str
     price: str
-    address: str
-    description: str
-    # Add more fields as needed
+    total_rooms: str
+    bedrooms: str
+    internal_surface: str
+    external_surface: str
+    city_zipcode: str
+    full_description: str
+    characteristics: str
+    energy_performance: str
+    construction_date: str
+    heating_type: str
+    heating_source: str
 
 @app.post("/extract", response_model=ExtractResponse)
 async def extract(request: ExtractRequest):
+    selectors = {
+        "price": "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-1rt48lp > span.css-otf0vo",
+        "total_rooms": "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(1) > span",
+        "bedrooms": "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(2) > span:nth-child(2)",
+        "internal_surface": "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(3) > span:nth-child(2)",
+        "external_surface": "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1ez736g > div.css-o51ctb > div > div:nth-child(4) > span:nth-child(2)",
+        "city_zipcode": "#root > div > main > div.css-18xl464.MainColumn > div > h1 > div.css-1tn1yel > button.css-8tb8om > div > span",
+        "full_description": "#root > div > main > div.css-18xl464.MainColumn > div > section.css-13o7eu2.Section.Description > div > div > div.css-85qpxe.DescriptionTexts",
+        "characteristics": "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(4) > div",
+        "energy_performance": "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > div.css-1fobf8d > div > div:nth-child(1) > div",
+        "construction_date": "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(1) > div > span:nth-child(2)",
+        "heating_type": "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(3) > div > span:nth-child(2)",
+        "heating_source": "#root > div > main > div.css-18xl464.MainColumn > div > section:nth-child(8) > div > ul > li:nth-child(4) > div > span:nth-child(2)",
+    }
+
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True, args=["--disable-dev-shm-usage"])
@@ -59,27 +81,22 @@ async def extract(request: ExtractRequest):
             except Exception as e:
                 logger.warning(f"GDPR consent button not found or could not be clicked: {e}")
 
-            # --- Data Extraction (replace selectors as needed) ---
-            try:
-                title = await page.text_content("h1[data-testid='ad-title']") or ""
-                price = await page.text_content("span[data-testid='ad-price']") or ""
-                address = await page.text_content("div[data-testid='ad-address']") or ""
-                description = await page.text_content("div[data-testid='ad-description']") or ""
-            except Exception as e:
-                logger.error(f"Error extracting fields: {e}")
-                raise HTTPException(status_code=500, detail="Error extracting fields.")
+            # --- Data Extraction ---
+            extracted = {}
+            for field, selector in selectors.items():
+                try:
+                    value = await page.text_content(selector)
+                    extracted[field] = value.strip() if value else ""
+                except Exception as e:
+                    logger.warning(f"Could not extract '{field}': {e}")
+                    extracted[field] = ""
 
             redirected_url = page.url
-
             logger.info(f"Extraction successful for {redirected_url}")
 
             return ExtractResponse(
                 redirected_url=redirected_url,
-                title=title.strip(),
-                price=price.strip(),
-                address=address.strip(),
-                description=description.strip(),
-                # Add more fields as needed
+                **extracted
             )
     except HTTPException:
         raise  # Already handled above
