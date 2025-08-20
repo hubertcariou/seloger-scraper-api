@@ -61,13 +61,13 @@ async def extract(request: ExtractRequest):
 
     try:
         async with async_playwright() as p:
-            # Use a realistic user-agent to avoid bot detection
             user_agent = (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/115.0.0.0 Safari/537.36"
             )
-            browser = await p.chromium.launch(headless=True, args=["--disable-dev-shm-usage"])
+            # Set headless=False for local, visible browser
+            browser = await p.chromium.launch(headless=False, args=["--disable-dev-shm-usage"])
             context = await browser.new_context(user_agent=user_agent)
             page = await context.new_page()
             try:
@@ -88,23 +88,6 @@ async def extract(request: ExtractRequest):
                     await page.wait_for_timeout(1000)
             except Exception as e:
                 logger.info("GDPR consent button not found or already accepted.")
-
-            # --- Screenshot after GDPR handling ---
-            try:
-                await page.screenshot(path="page_after_gdpr.png", full_page=True)
-                logger.info("Screenshot saved as page_after_gdpr.png")
-            except Exception as e:
-                logger.warning(f"Could not take screenshot: {e}")
-
-            # --- Log HTML content after GDPR handling ---
-            try:
-                html = await page.content()
-                logger.info("HTML content after GDPR handling logged.")
-                # Optionally, write to a file for deep debugging:
-                # with open("page_after_gdpr.html", "w", encoding="utf-8") as f:
-                #     f.write(html)
-            except Exception as e:
-                logger.warning(f"Could not get HTML content: {e}")
 
             # --- Wait for main content (price) before extracting ---
             try:
@@ -139,7 +122,6 @@ async def extract(request: ExtractRequest):
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
 
-# Optional: health check endpoint
 @app.get("/health")
 async def health():
     return {"status": "ok"}
